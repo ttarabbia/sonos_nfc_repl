@@ -1,5 +1,6 @@
 import sys
 import threading
+import time
 import nfc
 import ndef
 from ndef.uri import UriRecord
@@ -27,32 +28,59 @@ def reset_reader():
     except Exception as e:
         print(f"Failed to claim: {e}")
 
+def play_uri(speaker, sharelink, uri):
+    """Play a URI by adding it to the queue and starting playback."""
+    speaker.stop()
+    speaker.clear_queue()
+    sharelink.add_share_link_to_queue(uri, position=1, as_next=True)
+    speaker.play_from_queue(0)
+    print(f"Added {uri} to the queue and started playback.")
+    return uri
+
 def handle_nfc_tag(tag, speaker, sharelink):
     """Handle NFC tag detection and read the URI."""
     if hasattr(tag, 'ndef') and tag.ndef:
         for record in tag.ndef.records:
             if hasattr(record, 'uri'):
                 if record.uri:
-                    speaker.stop()
-                    sharelink.add_share_link_to_queue(record.uri, position=0, as_next=True)
-                    speaker.play_from_queue(0)
-                    print(f"Added {record.uri} to the queue and started playback.")
-                    # Simulate the -a command for the REPL
+                    play_uri(speaker, sharelink, record.uri)
                     print(f"\n>> -a {record.uri}")
+                    reset_reader()
                 return record.uri
     return None
 
 def nfc_listener(speaker, sharelink):
-    """Listen for NFC tags and process them."""
-    reset_reader()
-    with nfc.ContactlessFrontend('usb') as clf:
-        print("NFC listener started. Waiting for tags...")
-        while True:
-            clf.connect(rdwr={'on-connect': lambda tag: handle_nfc_tag(tag, speaker, sharelink) or True, 'on-release': lambda tag: None})
+    """Listen for NFC tags and process them with retry logic."""
+    max_retries = 3
+    retry_delay = 2  # seconds
+    
+    while True:
+        try:
+            reset_reader()  # Reset USB connection before each attempt
+            with nfc.ContactlessFrontend('usb') as clf:
+                print("NFC listener started. Waiting for tags...")
+                while True:
+                    clf.connect(rdwr={
+                        'on-connect': lambda tag: handle_nfc_tag(tag, speaker, sharelink) or True,
+                        'on-release': lambda tag: None
+                    })
+
+        except (IOError, OSError) as e:
+            print(f"NFC reader error: {str(e)}")
+            if max_retries <= 0:
+                print("Max retries exceeded. NFC listener stopped.")
+                break
+            max_retries -= 1
+            time.sleep(retry_delay)
+            continue
+        except Exception as e:
+            print(f"Unexpected NFC error: {str(e)}")
+            break
 
 def main():
     speaker = discovery.any_soco()
     sharelink = ShareLinkPlugin(speaker)
+    print(sharelink)
     
     # Start NFC listener in a separate thread
     nfc_thread = threading.Thread(target=nfc_listener, args=(speaker, sharelink), daemon=True)
@@ -104,10 +132,8 @@ def main():
                     print("Error: URL missing (e.g., -a https://spotify...).")
                     continue
                 url = user_input[1]
-                speaker.stop()  # Exit Spotify Connect
-                sharelink.add_share_link_to_queue(url, position=0, as_next=True)
-                speaker.play_from_queue(0)  # Force local queue playback
-                print(f"Added {url} to the queue and started playback.")
+                play_uri(speaker, sharelink, url)
+                reset_reader()
             
             else:
                 print("Error: Unknown command. Valid: play, pause, next, -v [VOLUME], -a [URL], exit")
