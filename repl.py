@@ -18,15 +18,16 @@ def reset_reader():
     
     try:
         dev.detach_kernel_driver(0)
+        dev.detach_kernel_driver(1)
         print("Detached kernel driver.")
+        try:
+            dev.set_configuration()
+            print(dev.configurations())
+            print("Device claimed!")
+        except Exception as e:
+            print(f"Failed to claim: {e}")
     except Exception as e:
         print(f"Couldn't detach: {e}")
-    
-    try:
-        dev.set_configuration()
-        print("Device claimed!")
-    except Exception as e:
-        print(f"Failed to claim: {e}")
 
 def play_uri(speaker, sharelink, uri):
     """Play a URI by adding it to the queue and starting playback."""
@@ -39,31 +40,80 @@ def play_uri(speaker, sharelink, uri):
 
 def handle_nfc_tag(tag, speaker, sharelink):
     """Handle NFC tag detection and read the URI."""
-    if hasattr(tag, 'ndef') and tag.ndef:
-        for record in tag.ndef.records:
-            if hasattr(record, 'uri') and record.uri:
-                play_uri(speaker, sharelink, record.uri)
-                print(f"\n>> -a {record.uri}")
-                return record.uri
-    return None
+    try: 
+        if hasattr(tag, 'ndef') and tag.ndef:
+            for record in tag.ndef.records:
+                if hasattr(record, 'uri') and record.uri:
+                    play_uri(speaker, sharelink, record.uri)
+                    print(f"\n>> -a {record.uri}")
+                    return True
+                    # return record.uri
+        return True
+    except Exception as e:
+        print(f"error handling tag: {e}")
+        return True
+
+
+def nfc_senser(speaker, sharelink):
+    reset_reader()
+    max_retries = 3
+    retry_delay = 3  # seconds
+
+    while True:
+        try:
+            with nfc.ContactlessFrontend('usb:072f:2200') as clf:
+                print("NFC listener started. Waiting for tags...")
+                while True:
+                    # Low-level sensing rather than relying solely on connect()
+                    target = clf.sense(
+                        nfc.clf.RemoteTarget('106A'),  # Type 2 tags are usually Type A (106A)
+                        iterations=10,  # Short polling bursts
+                        interval=0.1,
+                        beep_on_connect=True
+                    )
+                    if target is None:
+                        continue  # No tag detected, quickly retry sensing
+                    
+                    # Tag detected: connect explicitly
+                    tag = nfc.tag.activate(clf, target)
+                    if tag:
+                        handle_nfc_tag(tag, speaker, sharelink)
+                        print("Tag processed and disconnected explicitly.")
+                    
+                    time.sleep(0.5)  # Short delay for hardware stability
+
+        except (IOError, OSError) as e:
+            print(f"NFC reader error: {str(e)}")
+            if max_retries <= 0:
+                print("Max retries exceeded. NFC listener stopped.")
+                break
+            max_retries -= 1
+            reset_reader()
+            time.sleep(retry_delay)
+        except Exception as e:
+            print(f"Unexpected NFC error: {str(e)}")
+            break
 
 def nfc_listener(speaker, sharelink):
     """Listen for NFC tags and process them with retry logic."""
+    reset_reader()
     max_retries = 3
-    retry_delay = 2  # seconds
+    retry_delay = 3  # seconds
     
     while True:
         try:
-            reset_reader()  # Reset USB connection before each attempt
             with nfc.ContactlessFrontend('usb') as clf:
                 print("NFC listener started. Waiting for tags...")
                 while True:
+                    tag_processed = False
                     clf.connect(rdwr={
-                        'on-connect': lambda tag: handle_nfc_tag(tag, speaker, sharelink) or True,
-                        'on-release': lambda tag: reset_reader()
-                    }, terminate=lambda: False)
-
-
+                        'on-connect': lambda tag: handle_nfc_tag(tag, speaker, sharelink),
+                        'on-release': lambda tag: print(f"Tag {tag} released")
+                    }, terminate=lambda: tag_processed)
+                    tag_processed = True
+                    print(f"tag processed? {tag_processed}")
+                    time.sleep(0.5)
+                    # reset_reader()
 
         except (IOError, OSError) as e:
             print(f"NFC reader error: {str(e)}")
@@ -72,6 +122,7 @@ def nfc_listener(speaker, sharelink):
                 break
             max_retries -= 1
             time.sleep(retry_delay)
+            reset_reader()
             continue
         except Exception as e:
             print(f"Unexpected NFC error: {str(e)}")
@@ -83,7 +134,7 @@ def main():
     print(sharelink)
     
     # Start NFC listener in a separate thread
-    nfc_thread = threading.Thread(target=nfc_listener, args=(speaker, sharelink), daemon=True)
+    nfc_thread = threading.Thread(target=nfc_senser, args=(speaker, sharelink), daemon=True)
     nfc_thread.start()
     
     print("Sonos REPL started. Commands: play, pause, next, -v [VOLUME], -a [URL], exit")
