@@ -17,7 +17,6 @@ def reset_reader():
         raise ValueError("Device not found")
     
     try:
-        dev.detach_kernel_driver(0)
         dev.detach_kernel_driver(1)
         print("Detached kernel driver.")
         try:
@@ -44,6 +43,7 @@ def handle_nfc_tag(tag, speaker, sharelink):
         if hasattr(tag, 'ndef') and tag.ndef:
             for record in tag.ndef.records:
                 if hasattr(record, 'uri') and record.uri:
+                    speaker.volume = int(31)
                     play_uri(speaker, sharelink, record.uri)
                     print(f"\n>> -a {record.uri}")
                     return True
@@ -69,7 +69,7 @@ def nfc_senser(speaker, sharelink):
                         nfc.clf.RemoteTarget('106A'),  # Type 2 tags are usually Type A (106A)
                         iterations=10,  # Short polling bursts
                         interval=0.1,
-                        beep_on_connect=True
+                        # options={'beep_on_connect':True}
                     )
                     if target is None:
                         continue  # No tag detected, quickly retry sensing
@@ -79,6 +79,10 @@ def nfc_senser(speaker, sharelink):
                     if tag:
                         handle_nfc_tag(tag, speaker, sharelink)
                         print("Tag processed and disconnected explicitly.")
+                        chipset = clf.device.chipset
+                        chipset.set_buzzer_and_led_to_active(duration_in_ms=100)
+                        chipset.send_ack()
+                        chipset.set_buzzer_and_led_to_default()
                     
                     time.sleep(0.5)  # Short delay for hardware stability
 
