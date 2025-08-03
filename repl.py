@@ -41,11 +41,9 @@ def handle_nfc_tag(tag, speaker, sharelink):
     """Handle NFC tag detection and read the URI."""
     if hasattr(tag, 'ndef') and tag.ndef:
         for record in tag.ndef.records:
-            if hasattr(record, 'uri'):
-                if record.uri:
-                    play_uri(speaker, sharelink, record.uri)
-                    print(f"\n>> -a {record.uri}")
-                    reset_reader()
+            if hasattr(record, 'uri') and record.uri:
+                play_uri(speaker, sharelink, record.uri)
+                print(f"\n>> -a {record.uri}")
                 return record.uri
     return None
 
@@ -62,8 +60,10 @@ def nfc_listener(speaker, sharelink):
                 while True:
                     clf.connect(rdwr={
                         'on-connect': lambda tag: handle_nfc_tag(tag, speaker, sharelink) or True,
-                        'on-release': lambda tag: None
-                    })
+                        'on-release': lambda tag: reset_reader()
+                    }, terminate=lambda: False)
+
+
 
         except (IOError, OSError) as e:
             print(f"NFC reader error: {str(e)}")
@@ -133,7 +133,6 @@ def main():
                     continue
                 url = user_input[1]
                 play_uri(speaker, sharelink, url)
-                reset_reader()
             
             else:
                 print("Error: Unknown command. Valid: play, pause, next, -v [VOLUME], -a [URL], exit")
