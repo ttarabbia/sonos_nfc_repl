@@ -136,6 +136,7 @@ def main():
     speaker = discovery.any_soco()
     sharelink = ShareLinkPlugin(speaker)
     print(sharelink)
+    print(speaker)
     
     # Start NFC listener in a separate thread
     nfc_thread = threading.Thread(target=nfc_senser, args=(speaker, sharelink), daemon=True)
