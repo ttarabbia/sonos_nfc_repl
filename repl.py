@@ -133,7 +133,19 @@ def nfc_listener(speaker, sharelink):
             break
 
 def main():
-    speaker = discovery.any_soco()
+    while True:
+        speaker = discovery.any_soco(allow_network_scan=True)
+        if speaker is not None:
+            break
+        print("No speaker found via discovery. Trying direct connection to 192.168.0.103...")
+        try:
+            speaker = SoCo("192.168.0.103")
+            if speaker is not None:
+                break
+        except Exception as e:
+            print(f"Failed to connect to speaker at 192.168.0.103: {e}")
+        time.sleep(1)
+    
     sharelink = ShareLinkPlugin(speaker)
     print(sharelink)
     print(speaker)
