@@ -83,6 +83,7 @@ def nfc_senser(speaker, sharelink):
                         chipset.set_buzzer_and_led_to_active(duration_in_ms=100)
                         chipset.send_ack()
                         chipset.set_buzzer_and_led_to_default()
+                        time.sleep(8)
                     
                     time.sleep(0.5)  # Short delay for hardware stability
 
