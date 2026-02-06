@@ -1,3 +1,5 @@
+from soco.plugins.sharelink import ShareLinkPlugin
+from soco import SoCo, discovery
 import sys
 import threading
 import time
@@ -7,15 +9,14 @@ from ndef.uri import UriRecord
 from binascii import hexlify
 import usb.core
 sys.path.insert(0, "./vendor")
-from soco import SoCo, discovery
-from soco.plugins.sharelink import ShareLinkPlugin
+
 
 def reset_reader():
     """Reset the NFC reader USB connection."""
     dev = usb.core.find(idVendor=0x072f, idProduct=0x2200)
     if dev is None:
-        raise ValueError("Device not found")
-    
+	    raise ValueError("Device not found")
+
     try:
         dev.detach_kernel_driver(1)
         print("Detached kernel driver.")
@@ -31,7 +32,11 @@ def reset_reader():
 def play_uri(speaker, sharelink, uri):
     """Play a URI by adding it to the queue and starting playback."""
     speaker.stop()
-    speaker.clear_queue()
+    if 'playlist' in uri:
+        speaker.clear_queue()
+        speaker.shuffle = True
+    else:
+	    speaker.shuffle = False
     sharelink.add_share_link_to_queue(uri, position=1, as_next=True)
     speaker.play_from_queue(0)
     print(f"Added {uri} to the queue and started playback.")
@@ -43,7 +48,7 @@ def handle_nfc_tag(tag, speaker, sharelink):
         if hasattr(tag, 'ndef') and tag.ndef:
             for record in tag.ndef.records:
                 if hasattr(record, 'uri') and record.uri:
-                    speaker.volume = int(31)
+                    speaker.volume = int(30)
                     play_uri(speaker, sharelink, record.uri)
                     print(f"\n>> -a {record.uri}")
                     return True
@@ -83,7 +88,7 @@ def nfc_senser(speaker, sharelink):
                         chipset.set_buzzer_and_led_to_active(duration_in_ms=100)
                         chipset.send_ack()
                         chipset.set_buzzer_and_led_to_default()
-                        time.sleep(8)
+                        time.sleep(12)
                     
                     time.sleep(0.5)  # Short delay for hardware stability
 
