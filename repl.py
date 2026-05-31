@@ -4,12 +4,57 @@ import sys
 import threading
 import time
 import nfc
+import os
+import subprocess
 import ndef
+from typing import Optional
 from ndef.uri import UriRecord
 from binascii import hexlify
 import usb.core
 sys.path.insert(0, "./vendor")
 
+mount_point = "/tmp/jellyfin_mount"
+mpv_process: Optional[subprocess.Popen] = None
+
+def play_video(file_path):
+    global mpv_process
+    try:
+        display_on()
+        
+        if mpv_process and mpv_process.poll() is None:
+            mpv_process.terminate()
+            mpv_process.wait()
+        
+        cmd = ["mpv", file_path, "--fullscreen", "--volume=80", "--really-quiet", "--keep-open=no"]
+        mpv_process = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, 
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"Playing: {file_path}")
+        mpv_process.wait()
+        display_off()
+    except Exception as e:
+        print(f"Failed to play: {e}")
+
+def display_on():
+    try:
+        subprocess.run(['pmset', 'displaysleepnow'], check=True)
+        time.sleep(1)
+        subprocess.run(['caffeinate', '-u', '-t', '5'], check=True, timeout=15)
+        subprocess.Popen(['caffeinate', '-d'], 
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1)
+        print("Display turned on")
+    except Exception as e:
+        print(f"Failed: {e}")
+
+def display_off():
+    try:
+        for i in range(5):
+            subprocess.run(['pmset', 'displaysleepnow'], check=True)
+            if i < 4:
+                time.sleep(1)
+        print("Display turned off")
+    except Exception as e:
+        print(f"Failed: {e}")
 
 def reset_reader():
     """Reset the NFC reader USB connection."""
@@ -32,13 +77,13 @@ def reset_reader():
 def play_uri(speaker, sharelink, uri):
     """Play a URI by adding it to the queue and starting playback."""
     speaker.stop()
+    sharelink.add_share_link_to_queue(uri, position=1, as_next=True)
+    speaker.play_from_queue(0)
     if 'playlist' in uri:
-        speaker.clear_queue()
+        # speaker.clear_queue()
         speaker.shuffle = True
     else:
 	    speaker.shuffle = False
-    sharelink.add_share_link_to_queue(uri, position=1, as_next=True)
-    speaker.play_from_queue(0)
     print(f"Added {uri} to the queue and started playback.")
     return uri
 
@@ -48,11 +93,15 @@ def handle_nfc_tag(tag, speaker, sharelink):
         if hasattr(tag, 'ndef') and tag.ndef:
             for record in tag.ndef.records:
                 if hasattr(record, 'uri') and record.uri:
-                    speaker.volume = int(30)
-                    play_uri(speaker, sharelink, record.uri)
-                    print(f"\n>> -a {record.uri}")
+                    speaker.volume = int(23)
+                    uri = record.uri
+                    if 'spotify' in uri:
+                        play_uri(speaker, sharelink, uri)
+                    elif 'jellyfin' in uri:
+                        file_path = uri
+                        play_video(f"{mount_point}/test@gmail.com/dockerbox/{file_path}")
+                    print(f"\n>> -a {uri}")
                     return True
-                    # return record.uri
         return True
     except Exception as e:
         print(f"error handling tag: {e}")
@@ -100,7 +149,7 @@ def nfc_senser(speaker, sharelink):
             max_retries -= 1
             reset_reader()
             time.sleep(retry_delay)
-        except Exception as e:
+
             print(f"Unexpected NFC error: {str(e)}")
             break
 
@@ -202,11 +251,20 @@ def main():
                     print("Error: Volume must be an integer (0-100).")
             
             elif command == "-a":
-                if len(user_input) < 2:
-                    print("Error: URL missing (e.g., -a https://spotify...).")
-                    continue
-                url = user_input[1]
-                play_uri(speaker, sharelink, url)
+                print(user_input)
+                if 'spotify' in user_input: 
+                    if len(user_input) < 2:
+                        print("Error: URL missing (e.g., -a https://spotify...).")
+                        continue
+                    url = user_input[1]
+                    play_uri(speaker, sharelink, url)
+                if 'jellyfin' in user_input:
+                    if len(user_input) < 2:
+                        file_path = f"jellyfin/Zelda/Twilight Princess Full Soundtrack.mkv"
+                    else:
+                        file_path = user_input[1]
+                    print(f"Playing: {file_path}")
+                    play_video(f"{mount_point}/test@gmail.com/dockerbox/{file_path}")
             
             else:
                 print("Error: Unknown command. Valid: play, pause, next, -v [VOLUME], -a [URL], exit")
