@@ -6,22 +6,22 @@ import usb.core
 import sys
 
 def reset_reader():
-    """Reset the NFC reader USB connection."""
+    """Run the reader setup sequence used by this utility previously."""
     dev = usb.core.find(idVendor=0x072f, idProduct=0x2200)
     if dev is None:
         raise ValueError("Device not found")
-    
+
     try:
         dev.detach_kernel_driver(0)
         print("Detached kernel driver.")
-    except Exception as e:
-        print(f"Couldn't detach: {e}")
-    
+    except Exception as error:
+        print(f"Couldn't detach: {error}")
+
     try:
         dev.set_configuration()
-        print("Device claimed!")
-    except Exception as e:
-        print(f"Failed to claim: {e}")
+        print("Device configured.")
+    except Exception as error:
+        print(f"Failed to configure: {error}")
 
 
 def read_ntag215(tag):
@@ -90,7 +90,6 @@ def main():
     with nfc.ContactlessFrontend('usb') as clf:
         print("Waiting for NTAG215 tag...")
         clf.connect(rdwr={'on-connect': lambda tag: read_ntag215(tag) or True, 'on-release': lambda tag: None})
-        clf.close()
 
 if __name__ == "__main__":
     main()
