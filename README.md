@@ -9,7 +9,7 @@ uv run repl.py
 ```
 
 It uses the existing mount at
-`/Volumes/Jellyfin/ttarabbia@gmail.com/dockerbox/jellyfin` by default. Set
+`/tmp/jellyfin_mount/ttarabbia@gmail.com/dockerbox/jellyfin` by default. Set
 `SONOS_NFC_MEDIA_ROOT` only if the media is mounted somewhere else.
 
 The web controls listen on `0.0.0.0:8000` by default. Configure a specific

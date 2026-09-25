@@ -51,8 +51,8 @@ from uvicorn import Config, Server
 NFC_DEVICE_PATH = os.environ.get("SONOS_NFC_NFC_DEVICE", "usb:072f:2200")
 NFC_USB_VENDOR_ID = 0x072F
 NFC_USB_PRODUCT_ID = 0x2200
-# Preserve the media routing configuration used by the NFC tag catalog.
-MEDIA_MOUNT_POINT = Path(os.environ.get("SONOS_NFC_MEDIA_MOUNT", "/Volumes/Jellyfin")).expanduser()
+# The current WebDAV mount used by this machine. Override it if remounted.
+MEDIA_MOUNT_POINT = Path(os.environ.get("SONOS_NFC_MEDIA_MOUNT", "/tmp/jellyfin_mount")).expanduser()
 MEDIA_ROOT = Path(
     os.environ.get(
         "SONOS_NFC_MEDIA_ROOT",
