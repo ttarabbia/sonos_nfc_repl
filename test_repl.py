@@ -80,9 +80,18 @@ class WebAppTests(unittest.TestCase):
             home = client.get("/")
             self.assertEqual(home.status_code, 200)
             self.assertIn("clip.mp4", home.text)
-            response = client.post("/volume", data={"volume": "37"}, follow_redirects=False)
-            self.assertEqual(response.status_code, 303)
+            response = client.post(
+                "/volume",
+                data={"volume": "37"},
+                headers={"Accept": "application/json"},
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 204)
             self.assertEqual(stack.commands.get_nowait(), Command("volume", "37", "web"))
+
+            response = client.post("/command/stop-video", follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(stack.commands.get_nowait(), Command("stop_video", None, "web"))
 
 
 class NfcTests(unittest.TestCase):

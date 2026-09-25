@@ -44,7 +44,7 @@ from fasthtml.common import (
 from soco import SoCo, discovery
 from soco.plugins.sharelink import ShareLinkPlugin
 from starlette.requests import Request
-from starlette.responses import RedirectResponse
+from starlette.responses import RedirectResponse, Response
 from uvicorn import Config, Server
 
 
@@ -108,10 +108,14 @@ class VideoPlayer:
         display_off()
 
     def stop(self) -> None:
+        stopped = False
         with self.lock:
             if self.process and self.process.poll() is None:
                 self.process.terminate()
+                stopped = True
             self.process = None
+        if stopped:
+            display_off()
 
 
 def display_on() -> None:
@@ -272,6 +276,9 @@ class CommandStack:
             self._play_uri(command.value or "")
         elif command.action == "video":
             self._play_video(command.value or "")
+        elif command.action == "stop_video":
+            self.player.stop()
+            self._set_result("Video stopped.")
         elif command.action == "queue":
             titles = [item.title for item in self.speaker.get_queue()]
             self._set_result("Queue: " + (", ".join(titles) if titles else "empty"))
@@ -442,6 +449,7 @@ def page(controller: CommandStack, message: Optional[str] = None):
             Button("Play video", type="submit"),
             method="post",
             action="/video",
+            cls="video-picker",
         )
         if videos
         else P(f"No videos found under {root}. Mount it or set SONOS_NFC_MEDIA_ROOT.")
@@ -477,6 +485,7 @@ def page(controller: CommandStack, message: Optional[str] = None):
             ),
             H2("Videos"),
             video_picker,
+            Form(Button("Stop video", type="submit"), method="post", action="/command/stop-video", cls="stop-video"),
             P("This page is intended to be reached through your Tailscale network."),
             Style("""
                 :root { color-scheme: light dark; font: 18px/1.4 system-ui, sans-serif; }
@@ -499,6 +508,8 @@ def page(controller: CommandStack, message: Optional[str] = None):
                 button:active { background: #1d4ed8; transform: scale(.98); }
                 form { min-width: 0; margin: .85rem 0; } label { display: block; font-weight: 650; }
                 select { display: block; margin-top: .45rem; padding: .65rem; border: 1px solid #7c7c7c; background: Canvas; color: CanvasText; }
+                .video-picker select { margin-bottom: 1.35rem; }
+                .stop-video button { background: #4b5563; }
                 input[type=range] {
                     display: block; min-width: 0; max-width: 100%; height: 3.2rem;
                     margin-top: .25rem; accent-color: #2563eb;
@@ -508,8 +519,18 @@ def page(controller: CommandStack, message: Optional[str] = None):
             Script("""
                 const slider = document.querySelector('[data-volume-slider]');
                 const value = document.querySelector('#volume-value');
+                const status = document.querySelector('#status');
                 slider.addEventListener('input', () => value.textContent = slider.value);
-                slider.addEventListener('change', () => slider.form.submit());
+                slider.addEventListener('change', async () => {
+                    const response = await fetch('/volume', {
+                        method: 'POST',
+                        headers: { Accept: 'application/json' },
+                        body: new FormData(slider.form),
+                    });
+                    status.textContent = response.ok
+                        ? `Volume ${slider.value} queued`
+                        : 'Could not set volume';
+                });
             """),
         ),
     )
@@ -532,9 +553,10 @@ def create_app(controller: CommandStack):
 
     @route("/command/{action}", methods=["POST"])
     def post_command(action: str):
-        if action not in {"play", "pause", "next"}:
+        actions = {"play": "play", "pause": "pause", "next": "next", "stop-video": "stop_video"}
+        if action not in actions:
             return RedirectResponse("/?message=Unknown+command", status_code=303)
-        controller.enqueue(action, source="web")
+        controller.enqueue(actions[action], source="web")
         return RedirectResponse(f"/?message={action.title()}+queued", status_code=303)
 
     @route("/volume", methods=["POST"])
@@ -547,6 +569,8 @@ def create_app(controller: CommandStack):
         except ValueError:
             return RedirectResponse("/?message=Volume+must+be+0-100", status_code=303)
         controller.enqueue("volume", volume, source="web")
+        if "application/json" in request.headers.get("accept", ""):
+            return Response(status_code=204)
         return RedirectResponse(f"/?message=Volume+{volume}+queued", status_code=303)
 
     @route("/video", methods=["POST"])
