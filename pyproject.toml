@@ -1,0 +1,11 @@
+[project]
+name = "sonos-nfc-repl"
+version = "0.1.0"
+description = "Sonos, NFC, terminal, and FastHTML media controls"
+requires-python = ">=3.11"
+dependencies = [
+    "nfcpy>=1.0.4",
+    "python-fasthtml>=0.14.13",
+    "pyusb>=1.3.1",
+    "soco>=0.31.4",
+]
