@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from repl import Command, CommandStack, available_videos, create_app, handle_nfc_tag, resolve_video_path
 from starlette.testclient import TestClient
@@ -53,6 +54,19 @@ class MediaPathTests(unittest.TestCase):
             self.assertEqual(resolve_video_path("Films/example.mp4", root), video.resolve())
             self.assertIsNone(resolve_video_path("../outside.mp4", root))
             self.assertEqual(available_videos(root), [video.resolve()])
+
+    def test_unavailable_directory_does_not_hide_other_videos(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / "available.mp4"
+            video.touch()
+
+            def walk_with_error(path, onerror):
+                onerror(FileNotFoundError(2, "No such file or directory", str(root / "missing")))
+                yield str(root), [], [video.name]
+
+            with patch("repl.os.walk", walk_with_error):
+                self.assertEqual(available_videos(root), [video.resolve()])
 
 
 class WebAppTests(unittest.TestCase):

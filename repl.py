@@ -161,18 +161,23 @@ def available_videos(media_root: Path = MEDIA_ROOT) -> list[Path]:
     root = media_root.expanduser().resolve()
     if not root.is_dir():
         return []
-    try:
-        return sorted(
-            (
-                path.resolve()
-                for path in root.rglob("*")
-                if path.is_file() and resolve_video_path(str(path), root) is not None
-            ),
-            key=lambda path: str(path).lower(),
-        )
-    except OSError as exc:
-        print(f"Could not scan media root {root}: {exc}")
-        return []
+
+    videos = []
+
+    def report_scan_error(error: OSError) -> None:
+        # A WebDAV directory can disappear during a walk. Skip that directory
+        # instead of hiding every other video in the mounted catalog.
+        print(f"Skipping unavailable media directory: {error.filename}")
+
+    for directory, _, filenames in os.walk(root, onerror=report_scan_error):
+        for filename in filenames:
+            path = Path(directory, filename)
+            if path.suffix.lower() not in VIDEO_EXTENSIONS:
+                continue
+            resolved = resolve_video_path(str(path), root)
+            if resolved is not None:
+                videos.append(resolved)
+    return sorted(videos, key=lambda path: str(path).lower())
 
 
 class CommandStack:
@@ -475,9 +480,10 @@ def page(controller: CommandStack, message: Optional[str] = None):
             P("This page is intended to be reached through your Tailscale network."),
             Style("""
                 :root { color-scheme: light dark; font: 18px/1.4 system-ui, sans-serif; }
+                html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
                 body { margin: 0; background: Canvas; color: CanvasText; }
                 main {
-                    box-sizing: border-box; max-width: 38rem; min-height: 100dvh; margin: 0 auto;
+                    box-sizing: border-box; width: 100%; max-width: 38rem; min-height: 100dvh; margin: 0 auto;
                     padding: max(1rem, env(safe-area-inset-top)) 1rem
                         max(1.5rem, env(safe-area-inset-bottom));
                 }
@@ -491,9 +497,12 @@ def page(controller: CommandStack, message: Optional[str] = None):
                 button, select { min-height: 3.4rem; border-radius: .7rem; }
                 button { border: 0; background: #2563eb; color: white; font-weight: 700; }
                 button:active { background: #1d4ed8; transform: scale(.98); }
-                form { margin: .85rem 0; } label { display: block; font-weight: 650; }
+                form { min-width: 0; margin: .85rem 0; } label { display: block; font-weight: 650; }
                 select { display: block; margin-top: .45rem; padding: .65rem; border: 1px solid #7c7c7c; background: Canvas; color: CanvasText; }
-                input[type=range] { display: block; height: 3.2rem; margin-top: .25rem; accent-color: #2563eb; }
+                input[type=range] {
+                    display: block; min-width: 0; max-width: 100%; height: 3.2rem;
+                    margin-top: .25rem; accent-color: #2563eb;
+                }
             """),
             # The only JavaScript updates the visible value while the range is dragged.
             Script("""
