@@ -44,7 +44,7 @@ from fasthtml.common import (
 from soco import SoCo, discovery
 from soco.plugins.sharelink import ShareLinkPlugin
 from starlette.requests import Request
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import Response
 from uvicorn import Config, Server
 
 
@@ -166,10 +166,11 @@ def available_videos(media_root: Path = MEDIA_ROOT) -> list[Path]:
 
     videos = []
 
-    def report_scan_error(error: OSError) -> None:
+    def report_scan_error(_: OSError) -> None:
         # A WebDAV directory can disappear during a walk. Skip that directory
-        # instead of hiding every other video in the mounted catalog.
-        print(f"Skipping unavailable media directory: {error.filename}")
+        # instead of hiding every other video in the mounted catalog. This is
+        # expected for the occasionally stale directory entries on this share.
+        pass
 
     for directory, _, filenames in os.walk(root, onerror=report_scan_error):
         for filename in filenames:
@@ -232,8 +233,6 @@ class CommandStack:
 
     def _run(self) -> None:
         while not self.stopping.is_set():
-            if not self.ready.wait(timeout=0.25):
-                continue
             try:
                 command = self.commands.get(timeout=0.25)
             except Empty:
@@ -247,6 +246,21 @@ class CommandStack:
 
     def execute(self, command: Command) -> None:
         """Execute one command. Kept public to make the queue behavior testable."""
+        if command.action == "video":
+            self._play_video(command.value or "")
+            return
+        if command.action == "stop_and_shut_off":
+            self.player.stop(shut_off_display=True)
+            self._set_result("Video stopped and display turned off.")
+            return
+        if command.action == "stop_video":
+            self.player.stop(shut_off_display=False)
+            self._set_result("Video stopped.")
+            return
+        if command.action == "uri" and "spotify" not in (command.value or ""):
+            self._play_video(command.value or "")
+            return
+
         if self.speaker is None:
             raise RuntimeError("Sonos speaker is not connected")
 
@@ -272,14 +286,6 @@ class CommandStack:
             self._set_result(f"Volume set to {volume}.")
         elif command.action == "uri":
             self._play_uri(command.value or "")
-        elif command.action == "video":
-            self._play_video(command.value or "")
-        elif command.action == "stop_and_shut_off":
-            self.player.stop(shut_off_display=True)
-            self._set_result("Video stopped and display turned off.")
-        elif command.action == "stop_video":
-            self.player.stop(shut_off_display=False)
-            self._set_result("Video stopped.")
         elif command.action == "queue":
             titles = [item.title for item in self.speaker.get_queue()]
             self._set_result("Queue: " + (", ".join(titles) if titles else "empty"))
@@ -451,6 +457,7 @@ def page(controller: CommandStack, message: Optional[str] = None):
             method="post",
             action="/video",
             cls="video-picker",
+            data_queue_form=True,
         )
         if videos
         else P(f"No videos found under {root}. Mount it or set SONOS_NFC_MEDIA_ROOT.")
@@ -464,9 +471,9 @@ def page(controller: CommandStack, message: Optional[str] = None):
             Small(f'{state["queued"]} command(s) waiting'),
             H2("Playback"),
             Div(
-                Form(Button("Play", type="submit"), method="post", action="/command/play", cls="play"),
-                Form(Button("Pause", type="submit"), method="post", action="/command/pause"),
-                Form(Button("Next", type="submit"), method="post", action="/command/next"),
+                Form(Button("Play", type="submit"), method="post", action="/command/play", cls="play", data_queue_form=True),
+                Form(Button("Pause", type="submit"), method="post", action="/command/pause", data_queue_form=True),
+                Form(Button("Next", type="submit"), method="post", action="/command/next", data_queue_form=True),
                 cls="controls",
             ),
             H2("Volume"),
@@ -491,8 +498,15 @@ def page(controller: CommandStack, message: Optional[str] = None):
                 method="post",
                 action="/command/stop-and-shut-off",
                 cls="stop-video",
+                data_queue_form=True,
             ),
-            Form(Button("Stop video", type="submit"), method="post", action="/command/stop-video", cls="stop-video-only"),
+            Form(
+                Button("Stop video", type="submit"),
+                method="post",
+                action="/command/stop-video",
+                cls="stop-video-only",
+                data_queue_form=True,
+            ),
             P("This page is intended to be reached through your Tailscale network."),
             Style("""
                 :root { color-scheme: light dark; font: 18px/1.4 system-ui, sans-serif; }
@@ -540,16 +554,18 @@ def page(controller: CommandStack, message: Optional[str] = None):
                         ? `Volume ${slider.value} queued`
                         : 'Could not set volume';
                 });
-                const videoPicker = document.querySelector('.video-picker');
-                if (videoPicker) videoPicker.addEventListener('submit', async (event) => {
+                for (const form of document.querySelectorAll('[data-queue-form]')) {
+                    form.addEventListener('submit', async (event) => {
                     event.preventDefault();
-                    const response = await fetch('/video', {
+                    const response = await fetch(form.action, {
                         method: 'POST',
                         headers: { Accept: 'application/json' },
-                        body: new FormData(videoPicker),
+                        body: new FormData(form),
                     });
-                    status.textContent = response.ok ? 'Video queued' : 'Could not queue video';
-                });
+                    const label = form.querySelector('button').textContent;
+                    status.textContent = response.ok ? `${label} queued` : `Could not run ${label.toLowerCase()}`;
+                    });
+                }
             """),
         ),
     )
@@ -578,8 +594,13 @@ def create_app(controller: CommandStack):
     def healthz():
         return Response("ok\n", media_type="text/plain")
 
+    def control_response(request: Request, message: str, status_code: int = 204):
+        if "application/json" in request.headers.get("accept", ""):
+            return Response(status_code=status_code)
+        return page(controller, message)
+
     @route("/command/{action}", methods=["POST"])
-    def post_command(action: str):
+    def post_command(action: str, request: Request):
         actions = {
             "play": "play",
             "pause": "pause",
@@ -588,9 +609,9 @@ def create_app(controller: CommandStack):
             "stop-video": "stop_video",
         }
         if action not in actions:
-            return RedirectResponse("/?message=Unknown+command", status_code=303)
+            return control_response(request, "Unknown command.", status_code=400)
         controller.enqueue(actions[action], source="web")
-        return RedirectResponse(f"/?message={action.title()}+queued", status_code=303)
+        return control_response(request, f"{action.title()} queued.")
 
     @route("/volume", methods=["POST"])
     async def post_volume(request: Request):
@@ -600,22 +621,18 @@ def create_app(controller: CommandStack):
             if not 0 <= int(volume) <= 100:
                 raise ValueError
         except ValueError:
-            return RedirectResponse("/?message=Volume+must+be+0-100", status_code=303)
+            return control_response(request, "Volume must be 0-100.", status_code=400)
         controller.enqueue("volume", volume, source="web")
-        if "application/json" in request.headers.get("accept", ""):
-            return Response(status_code=204)
-        return RedirectResponse(f"/?message=Volume+{volume}+queued", status_code=303)
+        return control_response(request, f"Volume {volume} queued.")
 
     @route("/video", methods=["POST"])
     async def post_video(request: Request):
         form = await request.form()
         video = str(form.get("video", ""))
         if resolve_video_path(video, controller.media_root) is None:
-            return RedirectResponse("/?message=Invalid+video", status_code=303)
+            return control_response(request, "Invalid video.", status_code=400)
         controller.enqueue("video", video, source="web")
-        if "application/json" in request.headers.get("accept", ""):
-            return Response(status_code=204)
-        return RedirectResponse("/?message=Video+queued", status_code=303)
+        return control_response(request, "Video queued.")
 
     return app
 

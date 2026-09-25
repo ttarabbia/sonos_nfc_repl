@@ -25,9 +25,13 @@ class FakeSpeaker:
 class FakeVideoPlayer:
     def __init__(self):
         self.stop_calls = []
+        self.play_calls = []
 
     def stop(self, shut_off_display=True):
         self.stop_calls.append(shut_off_display)
+
+    def play(self, path):
+        self.play_calls.append(path)
 
 
 class CommandStackTests(unittest.TestCase):
@@ -55,6 +59,17 @@ class CommandStackTests(unittest.TestCase):
         self.stack.execute(Command("stop_and_shut_off"))
 
         self.assertEqual(self.stack.player.stop_calls, [False, True])
+
+    def test_local_video_does_not_require_sonos_discovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "clip.mp4").touch()
+            stack = CommandStack(root, start_worker=False)
+            stack.player = FakeVideoPlayer()
+
+            stack.execute(Command("video", "clip.mp4"))
+
+            self.assertEqual(stack.player.play_calls, [(root / "clip.mp4").resolve()])
 
 
 class MediaPathTests(unittest.TestCase):
@@ -115,12 +130,26 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(response.status_code, 204)
             self.assertEqual(stack.commands.get_nowait(), Command("video", "clip.mp4", "web"))
 
-            response = client.post("/command/stop-and-shut-off", follow_redirects=False)
-            self.assertEqual(response.status_code, 303)
+            response = client.post("/video", data={"video": "clip.mp4"}, follow_redirects=False)
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("location", response.headers)
+            self.assertIn("Video queued.", response.text)
+            self.assertEqual(stack.commands.get_nowait(), Command("video", "clip.mp4", "web"))
+
+            response = client.post(
+                "/command/stop-and-shut-off",
+                headers={"Accept": "application/json"},
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 204)
             self.assertEqual(stack.commands.get_nowait(), Command("stop_and_shut_off", None, "web"))
 
-            response = client.post("/command/stop-video", follow_redirects=False)
-            self.assertEqual(response.status_code, 303)
+            response = client.post(
+                "/command/stop-video",
+                headers={"Accept": "application/json"},
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 204)
             self.assertEqual(stack.commands.get_nowait(), Command("stop_video", None, "web"))
 
 
