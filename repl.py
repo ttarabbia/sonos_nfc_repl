@@ -664,7 +664,7 @@ def terminal_repl(commands: CommandStack) -> None:
 def main() -> None:
     commands = CommandStack()
     app = create_app(commands)
-    web_server = Server(Config(app, host=WEB_HOST, port=WEB_PORT, log_level="info"))
+    web_server = Server(Config(app, host=WEB_HOST, port=WEB_PORT, log_level="warning", access_log=False))
     threading.Thread(target=web_server.run, name="web-server", daemon=True).start()
     threading.Thread(target=discover_speaker, args=(commands,), name="sonos-discovery", daemon=True).start()
     threading.Thread(target=nfc_listener, args=(commands,), name="nfc-listener", daemon=True).start()
