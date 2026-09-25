@@ -107,14 +107,12 @@ class VideoPlayer:
             self.process = None
         display_off()
 
-    def stop(self) -> None:
-        stopped = False
+    def stop(self, shut_off_display: bool = True) -> None:
         with self.lock:
             if self.process and self.process.poll() is None:
                 self.process.terminate()
-                stopped = True
             self.process = None
-        if stopped:
+        if shut_off_display:
             display_off()
 
 
@@ -276,8 +274,11 @@ class CommandStack:
             self._play_uri(command.value or "")
         elif command.action == "video":
             self._play_video(command.value or "")
+        elif command.action == "stop_and_shut_off":
+            self.player.stop(shut_off_display=True)
+            self._set_result("Video stopped and display turned off.")
         elif command.action == "stop_video":
-            self.player.stop()
+            self.player.stop(shut_off_display=False)
             self._set_result("Video stopped.")
         elif command.action == "queue":
             titles = [item.title for item in self.speaker.get_queue()]
@@ -485,7 +486,13 @@ def page(controller: CommandStack, message: Optional[str] = None):
             ),
             H2("Videos"),
             video_picker,
-            Form(Button("Stop video", type="submit"), method="post", action="/command/stop-video", cls="stop-video"),
+            Form(
+                Button("Stop and shut off", type="submit"),
+                method="post",
+                action="/command/stop-and-shut-off",
+                cls="stop-video",
+            ),
+            Form(Button("Stop video", type="submit"), method="post", action="/command/stop-video", cls="stop-video-only"),
             P("This page is intended to be reached through your Tailscale network."),
             Style("""
                 :root { color-scheme: light dark; font: 18px/1.4 system-ui, sans-serif; }
@@ -510,6 +517,8 @@ def page(controller: CommandStack, message: Optional[str] = None):
                 select { display: block; margin-top: .45rem; padding: .65rem; border: 1px solid #7c7c7c; background: Canvas; color: CanvasText; }
                 .video-picker select { margin-bottom: 1.35rem; }
                 .stop-video button { background: #4b5563; }
+                .stop-video-only { margin-top: .6rem; }
+                .stop-video-only button { background: #64748b; }
                 input[type=range] {
                     display: block; min-width: 0; max-width: 100%; height: 3.2rem;
                     margin-top: .25rem; accent-color: #2563eb;
@@ -561,9 +570,23 @@ def create_app(controller: CommandStack):
     def index(request: Request):
         return page(controller, request.query_params.get("message"))
 
+    @route("/health")
+    def health():
+        return Response("ok\n", media_type="text/plain")
+
+    @route("/healthz")
+    def healthz():
+        return Response("ok\n", media_type="text/plain")
+
     @route("/command/{action}", methods=["POST"])
     def post_command(action: str):
-        actions = {"play": "play", "pause": "pause", "next": "next", "stop-video": "stop_video"}
+        actions = {
+            "play": "play",
+            "pause": "pause",
+            "next": "next",
+            "stop-and-shut-off": "stop_and_shut_off",
+            "stop-video": "stop_video",
+        }
         if action not in actions:
             return RedirectResponse("/?message=Unknown+command", status_code=303)
         controller.enqueue(actions[action], source="web")
