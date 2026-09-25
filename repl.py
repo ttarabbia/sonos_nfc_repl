@@ -7,15 +7,28 @@ import nfc
 import os
 import subprocess
 import ndef
-from typing import Optional
-from ndef.uri import UriRecord
-from binascii import hexlify
 import usb.core
 import usb.util
+from pathlib import Path
+from typing import Optional
+from urllib.parse import unquote
+from ndef.uri import UriRecord
+from binascii import hexlify
 sys.path.insert(0, "./vendor")
 
-mount_point = "/tmp/jellyfin_mount"
 mpv_process: Optional[subprocess.Popen] = None
+# Mount the WebDAV share here. /Volumes is macOS's conventional persistent
+# mount location. Override either setting without changing code.
+MEDIA_MOUNT_POINT = Path(os.environ.get(
+    "SONOS_NFC_MEDIA_MOUNT",
+    "/Volumes/Jellyfin",
+)).expanduser()
+MEDIA_ROOT = Path(os.environ.get(
+    "SONOS_NFC_MEDIA_ROOT",
+    str(MEDIA_MOUNT_POINT / "ttarabbia@gmail.com/dockerbox/jellyfin"),
+)).expanduser()
+# A card stores this prefix followed by a path relative to MEDIA_ROOT.
+MEDIA_URI_PREFIX = "media:"
 NFC_DEVICE_PATH = "usb:072f:2200"
 NFC_USB_VENDOR_ID = 0x072F
 NFC_USB_PRODUCT_ID = 0x2200
@@ -27,30 +40,83 @@ NFC_RECONNECT_INITIAL_DELAY = 1
 NFC_RECONNECT_MAX_DELAY = 30
 ACR122U_LED_RED = bytes.fromhex("FF0040050400000000")
 
-def play_video(file_path):
+def kill_video():
+    global mpv_process
+    if mpv_process and mpv_process.poll() is None:
+        mpv_process.terminate()
+        mpv_process.wait()
+        mpv_process = None
+        display_off()
+
+def play_video_background(file_path):
     global mpv_process
     try:
+        kill_video()
         display_on()
-
-        if mpv_process and mpv_process.poll() is None:
-            mpv_process.terminate()
-            mpv_process.wait()
-
         cmd = ["mpv", file_path, "--fullscreen", "--volume=80", "--really-quiet", "--keep-open=no"]
-        mpv_process = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        mpv_process = proc
         print(f"Playing: {file_path}")
-        mpv_process.wait()
-        display_off()
+
+        def cleanup(p):
+            p.wait()
+            if mpv_process is p:
+                mpv_process = None
+                display_off()
+
+        threading.Thread(target=cleanup, args=(proc,), daemon=True).start()
     except Exception as e:
         print(f"Failed to play: {e}")
+
+
+def media_path_from_uri(uri):
+    """Resolve a media: URI to a file below the configured mounted share."""
+    if not uri.startswith(MEDIA_URI_PREFIX):
+        return None
+
+    relative_path = unquote(uri.removeprefix(MEDIA_URI_PREFIX))
+    if not relative_path:
+        print("Media tag has no path after 'media:'.")
+        return None
+
+    if not MEDIA_ROOT.is_dir():
+        print(
+            f"Media share is unavailable at {MEDIA_ROOT}. "
+            "Mount it, or set SONOS_NFC_MEDIA_ROOT."
+        )
+        return None
+
+    media_root = MEDIA_ROOT.resolve()
+    media_path = (media_root / relative_path).resolve()
+    try:
+        media_path.relative_to(media_root)
+    except ValueError:
+        print("Media tag path must stay inside the configured media share.")
+        return None
+
+    if not media_path.is_file():
+        print(f"Media file not found: {media_path}")
+        return None
+
+    return media_path
+
+
+def play_media_uri(uri):
+    """Start the locally mounted media file identified by a media: URI."""
+    media_path = media_path_from_uri(uri)
+    if media_path is None:
+        return False
+
+    play_video_background(str(media_path))
+    return True
 
 def display_on():
     try:
         subprocess.run(['pmset', 'displaysleepnow'], check=True)
         time.sleep(1)
         subprocess.run(['caffeinate', '-u', '-t', '5'], check=True, timeout=15)
-        subprocess.Popen(['caffeinate', '-d'],
+        subprocess.Popen(['caffeinate', '-d'], 
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(1)
         print("Display turned on")
@@ -69,30 +135,36 @@ def display_off():
 
 def play_uri(speaker, sharelink, uri):
     """Play a URI by adding it to the queue and starting playback."""
-    speaker.stop()
+    # Exit TV/line-in mode by switching transport to the queue
+    speaker.avTransport.SetAVTransportURI([
+        ("InstanceID", 0),
+        ("CurrentURI", f"x-rincon-queue:{speaker.uid}#0"),
+        ("CurrentURIMetaData", ""),
+    ])
     sharelink.add_share_link_to_queue(uri, position=1, as_next=True)
     speaker.play_from_queue(0)
     if 'playlist' in uri:
-        # speaker.clear_queue()
         speaker.shuffle = True
     else:
-	    speaker.shuffle = False
+        speaker.shuffle = False
     print(f"Added {uri} to the queue and started playback.")
     return uri
 
 def handle_nfc_tag(tag, speaker, sharelink):
     """Handle NFC tag detection and read the URI."""
-    try:
+    try: 
         if hasattr(tag, 'ndef') and tag.ndef:
             for record in tag.ndef.records:
                 if hasattr(record, 'uri') and record.uri:
                     speaker.volume = int(23)
                     uri = record.uri
-                    if 'spotify' in uri:
+                    if uri.startswith(MEDIA_URI_PREFIX):
+                        play_media_uri(uri)
+                    elif 'spotify' in uri:
+                        kill_video()
                         play_uri(speaker, sharelink, uri)
-                    elif 'jellyfin' in uri:
-                        file_path = uri
-                        play_video(f"{mount_point}/test@gmail.com/dockerbox/{file_path}")
+                    else:
+                        print(f"Unsupported NFC URI: {uri}")
                     print(f"\n>> -a {uri}")
                     return True
         return True
@@ -248,8 +320,8 @@ def main():
                 speaker = SoCo("192.168.0.103")
                 if speaker is not None:
                     break
-            except Exception as e:
-                print(f"Failed to connect to speaker at 192.168.0.103: {e}")
+            except Exception as error:
+                print(f"Failed to connect to speaker at 192.168.0.103: {error}")
             time.sleep(1)
 
         sharelink = ShareLinkPlugin(speaker)
@@ -307,30 +379,29 @@ def main():
                         print("Error: Volume must be an integer (0-100).")
 
                 elif command == "-a":
-                    print(user_input)
-                    if 'spotify' in user_input:
-                        if len(user_input) < 2:
-                            print("Error: URL missing (e.g., -a https://spotify...).")
-                            continue
-                        url = user_input[1]
-                        play_uri(speaker, sharelink, url)
-                    if 'jellyfin' in user_input:
-                        if len(user_input) < 2:
-                            file_path = f"jellyfin/Zelda/Twilight Princess Full Soundtrack.mkv"
-                        else:
-                            file_path = user_input[1]
-                        print(f"Playing: {file_path}")
-                        play_video(f"{mount_point}/test@gmail.com/dockerbox/{file_path}")
+                    if len(user_input) < 2:
+                        print("Error: URI missing (e.g., -a media:jellyfin/movie.mkv).")
+                        continue
+
+                    uri = user_input[1]
+                    if uri.startswith(MEDIA_URI_PREFIX):
+                        play_media_uri(uri)
+                    elif "spotify" in uri:
+                        kill_video()
+                        play_uri(speaker, sharelink, uri)
+                    else:
+                        print(f"Unsupported URI: {uri}")
 
                 else:
                     print("Error: Unknown command. Valid: play, pause, next, -v [VOLUME], -a [URL], exit")
-
-            except KeyboardInterrupt:
-                print("\nExiting...")
-                break
-            except Exception as e:
-                print(f"Error: {str(e)}")
+            except Exception as error:
+                print(f"Error: {error}")
+    except KeyboardInterrupt:
+        print("\nExiting...")
     finally:
         nfc_stop_event.set()
         if nfc_thread is not None:
             nfc_thread.join()
+
+if __name__ == "__main__":
+    main()
