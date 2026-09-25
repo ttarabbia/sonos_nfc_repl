@@ -89,6 +89,15 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(response.status_code, 204)
             self.assertEqual(stack.commands.get_nowait(), Command("volume", "37", "web"))
 
+            response = client.post(
+                "/video",
+                data={"video": "clip.mp4"},
+                headers={"Accept": "application/json"},
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 204)
+            self.assertEqual(stack.commands.get_nowait(), Command("video", "clip.mp4", "web"))
+
             response = client.post("/command/stop-video", follow_redirects=False)
             self.assertEqual(response.status_code, 303)
             self.assertEqual(stack.commands.get_nowait(), Command("stop_video", None, "web"))

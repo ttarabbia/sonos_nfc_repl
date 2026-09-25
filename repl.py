@@ -531,6 +531,16 @@ def page(controller: CommandStack, message: Optional[str] = None):
                         ? `Volume ${slider.value} queued`
                         : 'Could not set volume';
                 });
+                const videoPicker = document.querySelector('.video-picker');
+                if (videoPicker) videoPicker.addEventListener('submit', async (event) => {
+                    event.preventDefault();
+                    const response = await fetch('/video', {
+                        method: 'POST',
+                        headers: { Accept: 'application/json' },
+                        body: new FormData(videoPicker),
+                    });
+                    status.textContent = response.ok ? 'Video queued' : 'Could not queue video';
+                });
             """),
         ),
     )
@@ -580,6 +590,8 @@ def create_app(controller: CommandStack):
         if resolve_video_path(video, controller.media_root) is None:
             return RedirectResponse("/?message=Invalid+video", status_code=303)
         controller.enqueue("video", video, source="web")
+        if "application/json" in request.headers.get("accept", ""):
+            return Response(status_code=204)
         return RedirectResponse("/?message=Video+queued", status_code=303)
 
     return app
